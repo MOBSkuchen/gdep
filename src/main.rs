@@ -208,10 +208,6 @@ fn update_repo(repo: &Repository, branch_name: &String) -> Result<(), Error> {
     Ok(())
 }
 
-fn get_repo_only_clone(repo_url: &String, repo_path: &String) -> Result<Repository, Error> {
-    Repository::clone(repo_url, repo_path)
-}
-
 fn load_cfg(matches: &ArgMatches, repo_path: &String) -> Result<Config, ()> {
     let config_file_path = matches.get_one::<String>("config-file-o").and_then(|t1| {Some(t1.to_owned())})
         .or(matches.get_one::<String>("config-file-i").and_then(|t1| {Some(t1.to_owned())}).and_then(|t| {
