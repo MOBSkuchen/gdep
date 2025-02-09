@@ -29,7 +29,7 @@ pub enum ConfigError {
     MissingContent(String)
 }
 
-fn ld_yaml_docs(path: String) -> Result<Vec<Yaml>, ConfigError> {
+fn ld_yaml_docs(path: &String) -> Result<Vec<Yaml>, ConfigError> {
     let content = conv_err!(fs::read_to_string(path), ConfigError::ConfigFileNotFound)?;
     conv_err_e!(YamlLoader::load_from_str(&*content), ConfigError::ParsingFailed)
 }
@@ -39,7 +39,7 @@ fn ld_script_file(path: String) -> Result<String, ConfigError> {
 }
 
 impl Config {
-    pub fn load_from_file(path: String) -> Result<Self, ConfigError> {
+    pub fn load_from_file(path: &String) -> Result<Self, ConfigError> {
         let doc = &ld_yaml_docs(path)?[0];
         let name = &doc["name"].as_str();
         let re_run = doc["rerun"].as_bool().is_some_and(|t| {t});

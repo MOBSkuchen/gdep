@@ -1,18 +1,18 @@
 mod config;
 
-use std::env;
+use std::{env, fs};
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
 use std::process::{Command, Stdio};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
-use clap::{Arg, ColorChoice};
-use crate::config::Config;
+use clap::{Arg, ArgMatches, ColorChoice};
+use crate::config::{Config, ConfigError};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
-static DEFAULT_REPO_PATH: &str = "gdeb_repo";
+static DEFAULT_REPO_PATH: &str = "gdeb_used_repo";
 
 #[macro_export]
 macro_rules! conv_err {
@@ -209,7 +209,51 @@ fn get_repo_only_clone(repo_url: &String, repo_path: &String) -> Result<Reposito
     Repository::clone(repo_url, repo_path)
 }
 
+fn load_cfg(matches: &ArgMatches, repo_path: &String) -> Result<Config, ()> {
+    let config_file_path = matches.get_one::<String>("config-file-o").and_then(|t1| {Some(t1.to_owned())})
+        .or(matches.get_one::<String>("config-file-i").and_then(|t1| {Some(t1.to_owned())}).and_then(|t| {
+            Some(format!("{}/{}", repo_path, t)) })
+            .or(if matches.get_flag("config-inside") {Some(format!("{}/gdep.yaml", repo_path))}
+            else { Some("gdep.yaml".to_string()) })).unwrap();
+
+    match Config::load_from_file(&config_file_path) {
+        Ok(config) => { Ok(config) }
+        Err(err) => {
+            match err {
+                ConfigError::ConfigFileNotFound => {
+                    println!("Can not read config file (at '{config_file_path}')")
+                }
+                ConfigError::ScriptFileNotFound => {
+                    println!("Can not read script file")
+                }
+                ConfigError::ParsingFailed(e) => {
+                    println!("Can not parse config file, due to {e}")
+                }
+                ConfigError::MissingContent(w) => {
+                    println!("Missing required property in config: '{w}'")
+                }
+            }
+            Err(())
+        }
+    }
+}
+
+fn get_repo(repo_path: &String, repo_url: Option<&String>) -> Result<Repository, Error> {
+    match Repository::open(&repo_path) {
+        Ok(repo) => Ok(repo),
+        Err(e) => {
+            if repo_url.is_none() {
+                println!("Can not find repository (under '{repo_path}'), consider adding --remote-repo <repository>");
+                return Err(e)
+            }
+            Ok(Repository::clone(&repo_url.unwrap(), &repo_path)?)
+        }
+    }
+}
+
 fn main() -> Result<(), Error> {
+    // TODO: Do error handling
+    
     let matches = clap::Command::new(NAME)
         .about(DESCRIPTION)
         .version(VERSION)
@@ -230,13 +274,13 @@ fn main() -> Result<(), Error> {
         .arg(Arg::new("config-file-i")
             .long("repo-config")
             .short('c')
-            .help("Config file name (inside of repo). Defaults to <repo>/gdep.yaml")
+            .help("Config file name (inside of repo). Defaults to <repo>/<config-file-i>")
             .value_hint(clap::ValueHint::FilePath)
             .action(clap::ArgAction::Set))
         .arg(Arg::new("config-file-o")
             .long("static-config")
             .short('s')
-            .help("Config file name (outside of repo). Defaults to <repo>/gdep.yaml (uses --repo-config)")
+            .help("Config file name (outside of repo). Overwrites --repo-config. Defaults to <repo>/gdep.yaml (uses --repo-config)")
             .value_hint(clap::ValueHint::FilePath)
             .action(clap::ArgAction::Set))
         .arg(Arg::new("branch")
@@ -245,6 +289,11 @@ fn main() -> Result<(), Error> {
             .help("Set the branch to use. Will otherwise be auto-inferred to main or master")
             .value_hint(clap::ValueHint::FilePath)
             .action(clap::ArgAction::Set))
+        .arg(Arg::new("config-inside")
+            .long("config-inside")
+            .short('i')
+            .help("Config file is inside the repo. Only used if neither --repo-config nor --static-config are provided")
+            .action(clap::ArgAction::SetTrue))
         .arg(Arg::new("version")
             .short('v')
             .long("version")
@@ -255,23 +304,25 @@ fn main() -> Result<(), Error> {
     let opt_repo_url = matches.get_one::<String>("repo-url");
 
     let binding = DEFAULT_REPO_PATH.to_string();
-    let repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
+    let provided_repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
+    
+    let repo_infer_cfg = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
 
-    let repo = match Repository::open(&repo_path) {
-        Ok(repo) => repo,
-        Err(_) => {
-            if !opt_repo_url.is_some() {
-                println!("Can not find repository (under '{repo_path}'), consider adding --remote-repo <repository>");
-                return Ok(())
-            }
-            println!("Repository not found (under '{repo_path}'), cloning...");
-            Repository::clone(&opt_repo_url.unwrap(), &repo_path)?
-        }
+    let (repo, repo_path, config) = if repo_infer_cfg {
+        let repo = get_repo(provided_repo_path, opt_repo_url)?;
+        let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 1"))?;
+        (repo, provided_repo_path.clone(), config)
+    } else {
+        let repo_path = DEFAULT_REPO_PATH.to_string();
+        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 2"))?;
+        let repo = get_repo(provided_repo_path, opt_repo_url)?;
+        (repo, repo_path.clone(), config)
     };
 
-    let branch = matches.get_one::<String>("branch").or(Some(&get_default_branch(&repo)?));
+    let branch = matches.get_one::<String>("branch").and_then(|t| { Some(t.clone()) }).or(Some(get_default_branch(&repo)?)).unwrap();
 
-    // execute(repo_path, branch);
+    execute(config, repo_path, branch);
 
     Ok(())
 }
