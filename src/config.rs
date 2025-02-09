@@ -15,6 +15,8 @@ pub enum RepoLike {
 pub struct Config {
     name: String,
     re_run: bool,
+    exit_on_script_error: bool,
+    exit_on_gdep_error: bool,
     installation: Installation,
     repo: RepoLike
 }
@@ -41,6 +43,8 @@ impl Config {
         let name = &doc["name"].as_str();
         let re_run = doc["rerun"].as_bool().is_some_and(|t| {t});
         let inst_file = doc["use_file"].as_bool().is_some_and(|t| {t});
+        let exit_on_gdep_error = doc["gdep_terminate"].as_bool().is_some_and(|t| {t});
+        let exit_on_script_error = doc["script_terminate"].as_bool().is_some_and(|t| {t});
         let script = &doc[if inst_file {"file_path"} else {"script"}].as_str();
         let local_repo = doc["local_repo"].as_bool().is_some_and(|t| {t});
         let repo = &doc["repo"].as_str();
@@ -74,6 +78,8 @@ impl Config {
         Ok(Self {
             name: name.unwrap().to_string(),
             re_run,
+            exit_on_script_error,
+            exit_on_gdep_error,
             installation,
             repo
         })
