@@ -7,9 +7,9 @@ use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
 use crate::config::Config;
 
-fn update_sync(repo_path: Arc<&String>, branch_name: Arc<&String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<bool>) {
+fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<bool>) {
     let mut err = false;
-    let repo_x = Repository::open(*repo_path);
+    let repo_x = Repository::open(&*repo_path);
     
     if repo_x.is_ok() {
         let repo = repo_x.unwrap();
@@ -140,8 +140,8 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     let stop_flag = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel();
 
-    let repo_path_arc = Arc::new(&repo_path.clone());
-    let branch_name_arc = Arc::new(&branch_name.clone());
+    let repo_path_arc = Arc::new(repo_path.clone());
+    let branch_name_arc = Arc::new(branch_name.clone());
 
     let mut child = Command::new("sleep")
         .arg("4")
