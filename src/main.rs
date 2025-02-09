@@ -1,13 +1,15 @@
 mod config;
 
 use std::{env, fs};
+use std::path::PathBuf;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
 use std::process::{Command, Stdio};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
 use clap::{Arg, ArgMatches, ColorChoice};
-use crate::config::{Config, ConfigError};
+use run_script::ScriptOptions;
+use crate::config::{Config, ConfigError, RepoLike};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -17,7 +19,7 @@ static DEFAULT_REPO_PATH: &str = "gdeb_used_repo";
 #[macro_export]
 macro_rules! conv_err {
     ($pre:expr, $err: expr) => {
-        $pre.or_else(|e| { Err($err) })
+        $pre.or_else(|_| { Err($err) })
     };
 }
 
@@ -164,11 +166,12 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     let repo_path_arc = Arc::new(repo_path.clone());
     let branch_name_arc = Arc::new(branch_name.clone());
 
-    let mut child = Command::new("sleep")
-        .arg("4")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("Failed to start subprocess");
+    let mut options = ScriptOptions::new();
+    options.working_directory = Some(PathBuf::from(&repo_path));
+    
+    let args = vec![];
+
+    let mut child = run_script::spawn(config.script.as_str(), &args, &options).expect("Failed to start subprocess");
     
     let stop_flag_clone = Arc::clone(&stop_flag);
     let function_handle = thread::spawn(move || {
@@ -251,6 +254,15 @@ fn get_repo(repo_path: &String, repo_url: Option<&String>) -> Result<Repository,
     }
 }
 
+fn get_repo_config(config: &Config) -> Result<Repository, Error> {
+    let mt = "".to_string();
+    match &config.repo {
+        RepoLike::Remote(r) => {get_repo(&mt, Some(&r))}
+        RepoLike::Local(l) => {get_repo(&l, None)}
+        RepoLike::Remote2(r, d) => {get_repo(&r, Some(&d))}
+    }
+}
+
 fn main() -> Result<(), Error> {
     // TODO: Do error handling
     
@@ -316,7 +328,7 @@ fn main() -> Result<(), Error> {
     } else {
         let repo_path = DEFAULT_REPO_PATH.to_string();
         let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 2"))?;
-        let repo = get_repo(provided_repo_path, opt_repo_url)?;
+        let repo = get_repo_config(&config)?;
         (repo, repo_path.clone(), config)
     };
 
