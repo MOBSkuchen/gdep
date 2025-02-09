@@ -2,11 +2,6 @@ use std::fs;
 use yaml_rust2::{YamlLoader, Yaml};
 use crate::{conv_err, conv_err_e};
 
-pub enum Installation {
-    LoadFile(String, String), // Name, Content
-    LoadStr(String)
-}
-
 pub enum RepoLike {
     Remote(String),
     Local(String),
@@ -18,7 +13,7 @@ pub struct Config {
     pub re_run: bool,
     pub exit_on_script_error: bool,
     pub exit_on_gdep_error: bool,
-    pub installation: Installation,
+    pub script: String,
     pub repo: RepoLike
 }
 
@@ -74,14 +69,14 @@ impl Config {
         
         let script = script.unwrap().to_string();
         
-        let installation = if inst_file {Installation::LoadFile(script.clone(), ld_script_file(script)?)} else {Installation::LoadStr(script)};
+        let installation = if inst_file {ld_script_file(script)?} else {script};
 
         Ok(Self {
             name: name.unwrap().to_string(),
             re_run,
             exit_on_script_error,
             exit_on_gdep_error,
-            installation,
+            script: installation,
             repo
         })
     }
