@@ -1,5 +1,22 @@
 use std::env;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
+use std::process::Command;
+
+use std::process::{Command, Stdio};
+use std::thread;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
+
+fn long_running_function(stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<()>) {
+    while !*stop_flag.lock().unwrap() {
+        println!("Executing function...");
+        thread::sleep(Duration::from_secs(1));  // Simulating some work.
+    }
+
+    println!("Function execution stopped. Sending signal to main thread...");
+    sender.send(()).expect("Failed to send stop signal to main thread");
+}
+
 
 #[derive(Debug)]
 pub enum UpdateRelationState {
@@ -71,7 +88,7 @@ fn get_default_branch(repo: &Repository) -> Result<String, Error> {
 
 fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelationState, Error> {
     let head = repo.head()?.peel_to_commit()?;
-    
+
     let remote_branch = repo.find_reference(format!("refs/remotes/origin/{}", branch).as_str())?.peel_to_commit()?;
 
     let ahead_behind = repo.graph_ahead_behind(head.id(), remote_branch.id())?;
@@ -84,10 +101,54 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
     })
 }
 
+fn do_update_step() {
+    
+}
+
+fn execute() {
+    let stop_flag = Arc::new(Mutex::new(false));
+    let (tx, rx) = mpsc::channel();
+
+    let mut child = Command::new("sleep")
+        .arg("10")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to start subprocess");
+    
+    let stop_flag_clone = Arc::clone(&stop_flag);
+    let function_handle = thread::spawn(move || {
+        long_running_function(stop_flag_clone, tx);
+    });
+    
+    let result = child.wait().expect("Failed to wait on child");
+
+    // After the subprocess finishes, print the status
+    if result.success() {
+        println!("Subprocess completed successfully.");
+    } else {
+        println!("Subprocess failed with exit code: {}", result);
+    }
+
+    // Wait for a signal from the function thread to stop everything
+    rx.recv().expect("Failed to receive stop signal");
+
+    // Signal the function to stop immediately.
+    *stop_flag.lock().unwrap() = true;
+
+    // Kill the subprocess
+    println!("Terminating the subprocess...");
+    child.kill().expect("Failed to kill the subprocess");
+
+    // Wait for the function thread to finish
+    function_handle.join().expect("Function thread panicked");
+
+    println!("Main thread exiting.");
+}
+
 fn main() -> Result<(), Error> {
     let repo_url = env::args().nth(1).expect("Usage: gdep <repo_url> <repo_path>");
     let repo_path = env::args().nth(2).expect("Usage: gdep <repo_url> <repo_path>");
-    
+
     let repo = match Repository::open(&repo_path) {
         Ok(repo) => repo,
         Err(_) => {
@@ -97,7 +158,7 @@ fn main() -> Result<(), Error> {
     };
 
     let branch = Some(get_default_branch(&repo)?).unwrap();
-    
+
     let us = repo_update_cycle(&repo, &branch)?;
     println!("{:?}", us);
 
