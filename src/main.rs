@@ -1,3 +1,5 @@
+mod config;
+
 use std::env;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
 use std::process::Command;
