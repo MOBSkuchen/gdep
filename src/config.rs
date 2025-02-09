@@ -2,7 +2,7 @@ use std::fs;
 use yaml_rust2::{YamlLoader, Yaml};
 
 pub enum Installation {
-    LoadFile(String),
+    LoadFile(String, String), // Name, Content
     LoadStr(String)
 }
 
@@ -20,14 +20,19 @@ pub struct Config {
 }
 
 pub enum ConfigError {
-    FileNotFound,
+    ConfigFileNotFound,
+    ScriptFileNotFound,
     ParsingFailed(String),
     MissingContent(String)
 }
 
 fn ld_yaml_docs(path: String) -> Result<Vec<Yaml>, ConfigError> {
-    let content = fs::read_to_string(path).or_else(|e1| {Err(ConfigError::FileNotFound)})?;
+    let content = fs::read_to_string(path).or_else(|e1| {Err(ConfigError::ConfigFileNotFound)})?;
     YamlLoader::load_from_str(&*content).or_else(|e| {Err(ConfigError::ParsingFailed(e.to_string()))})
+}
+
+fn ld_script_file(path: String) -> Result<String, ConfigError> {
+    Ok(fs::read_to_string(path).or_else(|e1| { Err(ConfigError::ScriptFileNotFound) })?)
 }
 
 impl Config {
@@ -62,7 +67,9 @@ impl Config {
                                 }
                             };
         
-        let installation = if inst_file {Installation::LoadFile(script.unwrap().to_string())} else {Installation::LoadStr(script.unwrap().to_string())};
+        let script = script.unwrap().to_string();
+        
+        let installation = if inst_file {Installation::LoadFile(script.clone(), ld_script_file(script)?)} else {Installation::LoadStr(script)};
 
         Ok(Self {
             name: name.unwrap().to_string(),
