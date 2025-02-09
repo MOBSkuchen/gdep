@@ -13,12 +13,12 @@ pub enum RepoLike {
 }
 
 pub struct Config {
-    name: String,
-    re_run: bool,
-    exit_on_script_error: bool,
-    exit_on_gdep_error: bool,
-    installation: Installation,
-    repo: RepoLike
+    pub name: String,
+    pub re_run: bool,
+    pub exit_on_script_error: bool,
+    pub exit_on_gdep_error: bool,
+    pub installation: Installation,
+    pub repo: RepoLike
 }
 
 pub enum ConfigError {
