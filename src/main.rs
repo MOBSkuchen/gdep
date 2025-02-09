@@ -3,9 +3,30 @@ mod config;
 use std::env;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
 use std::process::{Command, Stdio};
+use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
+use clap::{Arg, ColorChoice};
 use crate::config::Config;
+
+pub const NAME: &str = env!("CARGO_PKG_NAME");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+static DEFAULT_REPO_PATH: &str = "gdeb_repo";
+
+#[macro_export]
+macro_rules! conv_err {
+    ($pre:expr, $err: expr) => {
+        $pre.or_else(|e| { Err($err) })
+    };
+}
+
+#[macro_export]
+macro_rules! conv_err_e {
+    ($pre:expr, $err: expr) => {
+        $pre.or_else(|e| { Err($err(e.to_string())) })
+    };
+}
 
 fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<bool>) {
     let mut err = false;
@@ -184,19 +205,71 @@ fn update_repo(repo: &Repository, branch_name: &String) -> Result<(), Error> {
     Ok(())
 }
 
+fn get_repo_only_clone(repo_url: &String, repo_path: &String) -> Result<Repository, Error> {
+    Repository::clone(repo_url, repo_path)
+}
+
 fn main() -> Result<(), Error> {
-    let repo_url = env::args().nth(1).expect("Usage: gdep <repo_url> <repo_path>");
-    let repo_path = env::args().nth(2).expect("Usage: gdep <repo_url> <repo_path>");
+    let matches = clap::Command::new(NAME)
+        .about(DESCRIPTION)
+        .version(VERSION)
+        .color(ColorChoice::Never)
+        .disable_version_flag(true)
+        .arg(Arg::new("repo-url")
+            .long("remote-repo")
+            .short('r')
+            .help("Remote repo to clone")
+            .value_hint(clap::ValueHint::Url)
+            .action(clap::ArgAction::Set))
+        .arg(Arg::new("repo-path")
+            .long("local-repo")
+            .short('l')
+            .help("Local repo to use. If paired with --remote-repo, this acts as a destination path. Ignored if it already exists")
+            .value_hint(clap::ValueHint::DirPath)
+            .action(clap::ArgAction::Set))
+        .arg(Arg::new("config-file-i")
+            .long("repo-config")
+            .short('c')
+            .help("Config file name (inside of repo). Defaults to <repo>/gdep.yaml")
+            .value_hint(clap::ValueHint::FilePath)
+            .action(clap::ArgAction::Set))
+        .arg(Arg::new("config-file-o")
+            .long("static-config")
+            .short('s')
+            .help("Config file name (outside of repo). Defaults to <repo>/gdep.yaml (uses --repo-config)")
+            .value_hint(clap::ValueHint::FilePath)
+            .action(clap::ArgAction::Set))
+        .arg(Arg::new("branch")
+            .long("branch")
+            .short('b')
+            .help("Set the branch to use. Will otherwise be auto-inferred to main or master")
+            .value_hint(clap::ValueHint::FilePath)
+            .action(clap::ArgAction::Set))
+        .arg(Arg::new("version")
+            .short('v')
+            .long("version")
+            .help("Displays the version")
+            .action(clap::ArgAction::Version))
+        .get_matches();
+    
+    let opt_repo_url = matches.get_one::<String>("repo-url");
+
+    let binding = DEFAULT_REPO_PATH.to_string();
+    let repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
 
     let repo = match Repository::open(&repo_path) {
         Ok(repo) => repo,
         Err(_) => {
-            println!("Repository not found (under '{}'), cloning...", &repo_path);
-            Repository::clone(&repo_url, &repo_path)?
+            if !opt_repo_url.is_some() {
+                println!("Can not find repository (under '{repo_path}'), consider adding --remote-repo <repository>");
+                return Ok(())
+            }
+            println!("Repository not found (under '{repo_path}'), cloning...");
+            Repository::clone(&opt_repo_url.unwrap(), &repo_path)?
         }
     };
 
-    let branch = Some(get_default_branch(&repo)?).unwrap();
+    let branch = matches.get_one::<String>("branch").or(Some(&get_default_branch(&repo)?));
 
     // execute(repo_path, branch);
 
