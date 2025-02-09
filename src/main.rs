@@ -1,9 +1,8 @@
 mod config;
 
-use std::{env, fs};
+use std::{env};
 use std::path::PathBuf;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
-use std::process::{Command, Stdio};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
