@@ -2,23 +2,55 @@ mod config;
 
 use std::env;
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
-use std::process::Command;
-
 use std::process::{Command, Stdio};
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use crate::config::Config;
 
-fn long_running_function(stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<()>) {
-    while !*stop_flag.lock().unwrap() {
-        println!("Executing function...");
-        thread::sleep(Duration::from_secs(1));  // Simulating some work.
+fn update_sync(repo_path: Arc<&String>, branch_name: Arc<&String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<bool>) {
+    let mut err = false;
+    let repo_x = Repository::open(*repo_path);
+    
+    if repo_x.is_ok() {
+        let repo = repo_x.unwrap();
+        while !*stop_flag.lock().unwrap() {
+            let res = repo_update_cycle(&repo, &branch_name);
+            if res.is_err() {
+                err = true;
+                break
+            }
+
+            let urs = res.unwrap();
+            match urs {
+                UpdateRelationState::Up2Date => {
+                    continue
+                }
+                UpdateRelationState::Ahead(a) => {
+                    err = true;
+                    if err {
+                        println!("Repo is {a} ahead of the remote repo")
+                    }
+                    break
+                }
+                UpdateRelationState::Behind(_) => {
+                    err = update_repo(&repo, &branch_name).is_err();
+                    if err {
+                        println!("Failed to update repo!")
+                    }
+                    break
+                }
+                UpdateRelationState::AheadBehind(a, b) => {
+                    if err {
+                        println!("Repo is {a} ahead of the remote repo and {b} behind")
+                    }
+                }
+            }
+        }
     }
 
     println!("Function execution stopped. Sending signal to main thread...");
-    sender.send(()).expect("Failed to send stop signal to main thread");
+    sender.send(err).expect("Failed to send stop signal to main thread");
 }
-
 
 #[derive(Debug)]
 pub enum UpdateRelationState {
@@ -55,7 +87,7 @@ fn merge_main_branch(repo: &Repository) -> Result<UpdateLog, Error> {
     Ok(UpdateLog::Success)
 }
 
-fn fetch_updates(repo: &Repository, remote_name: &str, branch_name: String) -> Result<(), Error> {
+fn fetch_updates(repo: &Repository, remote_name: &str, branch_name: &String) -> Result<(), Error> {
     let mut remote = repo.find_remote(remote_name)?;
 
     let mut cb = RemoteCallbacks::new();
@@ -65,7 +97,6 @@ fn fetch_updates(repo: &Repository, remote_name: &str, branch_name: String) -> R
     fetch_options.remote_callbacks(cb);
 
     remote.fetch(&[branch_name], Some(&mut fetch_options), None)?;
-    println!("Fetched latest changes from {}", remote_name);
 
     Ok(())
 }
@@ -103,48 +134,54 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
     })
 }
 
-fn do_update_step() {
+fn execute(config: Config, repo_path: String, branch_name: String) {
+    let do_rerun = config.re_run;
     
-}
-
-fn execute() {
     let stop_flag = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel();
 
+    let repo_path_arc = Arc::new(&repo_path.clone());
+    let branch_name_arc = Arc::new(&branch_name.clone());
+
     let mut child = Command::new("sleep")
-        .arg("10")
+        .arg("4")
         .stdout(Stdio::piped())
         .spawn()
         .expect("Failed to start subprocess");
     
     let stop_flag_clone = Arc::clone(&stop_flag);
     let function_handle = thread::spawn(move || {
-        long_running_function(stop_flag_clone, tx);
+        update_sync(repo_path_arc, branch_name_arc, stop_flag_clone, tx);
     });
     
     let result = child.wait().expect("Failed to wait on child");
 
-    // After the subprocess finishes, print the status
     if result.success() {
-        println!("Subprocess completed successfully.");
+        println!("Running script completed successfully.");
     } else {
-        println!("Subprocess failed with exit code: {}", result);
+        println!("Running script failed with exit code: {}", result);
     }
 
-    // Wait for a signal from the function thread to stop everything
-    rx.recv().expect("Failed to receive stop signal");
-
-    // Signal the function to stop immediately.
     *stop_flag.lock().unwrap() = true;
 
-    // Kill the subprocess
+    let err = rx.recv().expect("Failed to receive stop signal");
+    if err {
+        println!("Got an error while looking for updates!")
+    }
+
     println!("Terminating the subprocess...");
     child.kill().expect("Failed to kill the subprocess");
-
-    // Wait for the function thread to finish
     function_handle.join().expect("Function thread panicked");
 
-    println!("Main thread exiting.");
+    if do_rerun {
+        execute(config, repo_path, branch_name);
+    }
+}
+
+fn update_repo(repo: &Repository, branch_name: &String) -> Result<(), Error> {
+    fetch_updates(repo, "origin", branch_name)?;
+    merge_main_branch(repo)?;
+    Ok(())
 }
 
 fn main() -> Result<(), Error> {
@@ -161,11 +198,7 @@ fn main() -> Result<(), Error> {
 
     let branch = Some(get_default_branch(&repo)?).unwrap();
 
-    let us = repo_update_cycle(&repo, &branch)?;
-    println!("{:?}", us);
-
-    fetch_updates(&repo, "origin", branch)?;
-    merge_main_branch(&repo)?;
+    // execute(repo_path, branch);
 
     Ok(())
 }
