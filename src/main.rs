@@ -215,7 +215,7 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
 }
 
 fn execute(config: Config, repo_path: String, branch_name: String) -> Option<GdepError> {
-    let mut do_rerun = config.re_run;
+    let mut do_rerun = config.restart_after_update;
     
     let stop_flag = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel();
@@ -258,13 +258,12 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
     if result.is_some() {
         if !result.unwrap().success() {
             println!("Running script failed with exit code: {}", result.unwrap());
-            do_rerun = do_rerun && !config.exit_on_script_error;
+            do_rerun = !config.exit_on_script_error;
         }
     }
     
     if err.is_some() {
-        
-        do_rerun = do_rerun && !config.exit_on_gdep_error;
+        do_rerun = !config.exit_on_gdep_error;
     }
 
     *stop_flag.lock().unwrap() = true;
@@ -272,7 +271,7 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
     child.kill().expect("Failed to kill the subprocess");
     update_handle.join().expect("Function thread panicked");
 
-    if do_rerun {
+    if do_rerun || config.re_run {
         println!("Restarting...");
         execute(config, repo_path, branch_name);
     }
