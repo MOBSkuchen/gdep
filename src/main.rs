@@ -257,7 +257,7 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
     
     if result.is_none() {
         child.kill().expect("Error while killing child :(");
-        result = Some(child.wait().expect("Failed to wait"))
+        result = child.try_wait().expect("try_wait failed");
     }
 
     if result.is_some() {
