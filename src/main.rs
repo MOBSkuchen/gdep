@@ -329,7 +329,7 @@ fn run(matches: &ArgMatches) -> Result<(), GdepError> {
         let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
         (repo, provided_repo_path.clone(), load_cfg(&matches, &repo_path)?)
     } else {
-        let config = conv_err!(load_cfg(&matches, &provided_repo_path), Error::from_str("Could not load config 2"))?;
+        let config = load_cfg(&matches, &provided_repo_path)?;
         let repo = get_repo_config(&config, &provided_repo_path)?;
         (repo, provided_repo_path.to_owned(), config)
     };
