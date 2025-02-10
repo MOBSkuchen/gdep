@@ -216,7 +216,7 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
 }
 
 fn execute(config: Config, repo_path: String, branch_name: String) {
-    let do_rerun = config.re_run;
+    let mut do_rerun = config.re_run;
     
     let stop_flag = Arc::new(Mutex::new(false));
     let (tx, rx) = mpsc::channel();
@@ -239,13 +239,13 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     });
 
     let mut result: Option<ExitStatus> = None;
+    
+    let (mut err, mut stop) = rx.recv().expect("Failed to receive singal from update thread");
 
-    while !rx.recv().expect("Failed to receive singal from update thread").1 {
+    while !stop {
         let boring_result = child.try_wait();
         if boring_result.is_err() {
             *stop_flag.lock().unwrap() = true;
-            // TODO : add handling
-            boring_result.expect("Errorororororoor");
             break
         } else {
             result = boring_result.unwrap();
@@ -253,12 +253,18 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
         if result.is_some() {
             break;
         }
+        (err, stop) = rx.recv().expect("Failed to receive singal from update thread");
     }
 
     if result.is_some() {
         if !result.unwrap().success() {
             println!("Running script failed with exit code: {}", result.unwrap());
+            do_rerun = do_rerun && !config.exit_on_script_error;
         }
+    }
+    
+    if err {
+        do_rerun = do_rerun && !config.exit_on_gdep_error;
     }
 
     *stop_flag.lock().unwrap() = true;
@@ -267,6 +273,7 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     update_handle.join().expect("Function thread panicked");
 
     if do_rerun {
+        println!("Restarting...");
         execute(config, repo_path, branch_name);
     }
 }
