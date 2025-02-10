@@ -274,7 +274,9 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
 
     *stop_flag.lock().unwrap() = true;
 
+    println!("Waiting for script to finish...");
     child.kill().expect("Failed to kill the subprocess");
+    child.wait().expect("Waiting failed");
     update_handle.join().expect("Function thread panicked");
 
     if do_rerun || config.re_run {
