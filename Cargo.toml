@@ -1,5 +1,9 @@
 [package]
 name = "gdep"
+authors = ["MOBSkuchen"]
+description = "Git-deploy -> Easily deploy & auto-update apps"
+license = "MIT"
+readme = "README.md"
 version = "0.1.0"
 edition = "2021"
 
