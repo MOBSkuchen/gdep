@@ -1,9 +1,10 @@
 mod config;
 
-use std::{env};
+use std::{env, io};
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Child, ExitStatus};
-use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
+use std::process::{ExitStatus};
+use git2::{Error, Repository, BranchType, RemoteCallbacks, Cred, Commit, ObjectType, MergeOptions, AnnotatedCommit, FetchOptions, AutotagOption};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
@@ -43,6 +44,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
             let res = repo_update_cycle(&repo, &branch_name);
             if res.is_err() {
                 err = true;
+                println!("Error {}", res.unwrap_err());
                 break
             }
 
@@ -57,7 +59,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
                     break
                 }
                 UpdateRelationState::Behind(_) => {
-                    err = update_repo(&repo).is_err();
+                    err = update_repo(&repo, &*branch_name).is_err();
                     if err {
                         println!("Failed to update repo!")
                     } else {
@@ -74,7 +76,9 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
         }
     }
 
-    println!("Function execution stopped. Sending signal to main thread...");
+    if err {
+        println!("Error while searching for updates!")
+    }
     sender.send((err, true)).expect("Failed to send stop signal to main thread");
 }
 
@@ -86,50 +90,118 @@ pub enum UpdateRelationState {
     AheadBehind(usize, usize)
 }
 
-pub enum UpdateLog {
-    AlreadyUp2Date,
-    MergeConflicts,
-    Success
+fn find_last_commit(repo: &Repository) -> Result<Commit, Error> {
+    let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
+    match obj.into_commit() {
+        Ok(c) => Ok(c),
+        Err(e) => Err(Error::from_str("Failed to find last commit")),
+    }
 }
 
-fn merge_main_branch(repo: &Repository) -> Result<UpdateLog, Error> {
-    let fetch_head = repo.find_reference("FETCH_HEAD")?.peel_to_commit()?;
-    let head = repo.head()?.peel_to_commit()?;
+pub fn update_repo(repo: &Repository, branch_name: &str) -> Result<(), Error> {
+    let remote_name = "origin";
+    let mut remote = repo.find_remote(remote_name)?;
+    let fetch_commit = fetch_updates(repo, &[branch_name], &mut remote)?;
+    merge_updates(repo, branch_name, fetch_commit)
+}
 
-    let merge_base = repo.merge_base(head.id(), fetch_head.id())?;
-    if merge_base == fetch_head.id() {
-        return Ok(UpdateLog::AlreadyUp2Date);
+fn fetch_updates<'a>(
+    repo: &'a Repository,
+    refs: &[&str],
+    remote: &'a mut git2::Remote,
+) -> Result<AnnotatedCommit<'a>, Error> {
+    let mut cb = RemoteCallbacks::new();
+    cb.transfer_progress(|stats| {
+        if stats.received_objects() == stats.total_objects() {
+            print!(
+                "Resolving deltas {}/{}\r",
+                stats.indexed_deltas(),
+                stats.total_deltas()
+            );
+        } else if stats.total_objects() > 0 {
+            print!(
+                "Received {}/{} objects ({}) in {} bytes\r",
+                stats.received_objects(),
+                stats.total_objects(),
+                stats.indexed_objects(),
+                stats.received_bytes()
+            );
+        }
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(cb);
+    fo.download_tags(AutotagOption::All);
+    remote.fetch(refs, Some(&mut fo), None)?;
+
+    let fetch_head = repo.find_reference("FETCH_HEAD")?;
+    Ok(repo.reference_to_annotated_commit(&fetch_head)?)
+}
+
+fn merge_updates(
+    repo: &Repository,
+    remote_branch: &str,
+    fetch_commit: AnnotatedCommit,
+) -> Result<(), Error> {
+    let analysis = repo.merge_analysis(&[&fetch_commit])?;
+    if analysis.0.is_fast_forward() {
+        let refname = format!("refs/heads/{}", remote_branch);
+        match repo.find_reference(&refname) {
+            Ok(mut reference) => {
+                reference.set_target(fetch_commit.id(), "Fast-forward")?;
+                repo.set_head(&refname)?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            }
+            Err(_) => {
+                repo.reference(&refname, fetch_commit.id(), true, "Setting new branch")?;
+                repo.set_head(&refname)?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            }
+        }
+    } else if analysis.0.is_normal() {
+        let head_commit = repo.reference_to_annotated_commit(&repo.head()?)?;
+        perform_merge(repo, &head_commit, &fetch_commit)?;
     }
+    Ok(())
+}
 
-    let mut index = repo.merge_commits(&head, &fetch_head, None)?;
+fn perform_merge(
+    repo: &Repository,
+    local: &AnnotatedCommit,
+    remote: &AnnotatedCommit,
+) -> Result<(), Error> {
+    let local_tree = repo.find_commit(local.id())?.tree()?;
+    let remote_tree = repo.find_commit(remote.id())?.tree()?;
+    let ancestor_tree = repo.find_commit(repo.merge_base(local.id(), remote.id())?)?.tree()?;
+    let mut index = repo.merge_trees(&ancestor_tree, &local_tree, &remote_tree, None)?;
+
     if index.has_conflicts() {
-        return Ok(UpdateLog::MergeConflicts);
+        println!("Merge conflicts detected...");
+        repo.checkout_index(Some(&mut index), None)?;
+        return Ok(());
     }
 
-    let tree_id = index.write_tree_to(repo)?;  // Ensure index is tied to the repo
-    let tree = repo.find_tree(tree_id)?;
+    let result_tree = repo.find_tree(index.write_tree_to(repo)?)?;
     let sig = repo.signature()?;
-    repo.commit(Some("HEAD"), &sig, &sig, "Merged changes", &tree, &[&head, &fetch_head])?;
-
-    // Ensure working directory is updated
-    repo.checkout_head(Some(
-        git2::build::CheckoutBuilder::new().force()
-    ))?;
-
-    Ok(UpdateLog::Success)
+    let local_commit = repo.find_commit(local.id())?;
+    let remote_commit = repo.find_commit(remote.id())?;
+    repo.commit(Some("HEAD"), &sig, &sig, "Merge commit", &result_tree, &[&local_commit, &remote_commit])?;
+    repo.checkout_head(None)?;
+    Ok(())
 }
 
-fn fetch_updates(repo: &Repository, remote_name: &str, branch_name: &String) -> Result<(), Error> {
+fn fetch_updates2(repo: &Repository, remote_name: &str, branch_name: &String) -> Result<(), Error> {
     let mut remote = repo.find_remote(remote_name)?;
 
     let mut cb = RemoteCallbacks::new();
     cb.credentials(|_, _, _| Cred::default()); // Use default credentials
 
-    let mut fetch_options = git2::FetchOptions::new();
+    let mut fetch_options = FetchOptions::new();
     fetch_options.remote_callbacks(cb);
 
     remote.fetch(&[branch_name], Some(&mut fetch_options), None)?;
-
     Ok(())
 }
 
@@ -158,7 +230,7 @@ fn get_default_branch(repo: &Repository) -> Result<String, Error> {
 }
 
 fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelationState, Error> {
-    fetch_updates(repo, "origin", branch)?;
+    fetch_updates2(repo, "origin", branch)?;
     let head = repo.head()?.peel_to_commit()?;
 
     let remote_branch = repo.find_reference(format!("refs/remotes/origin/{}", branch).as_str())?.peel_to_commit()?;
@@ -227,11 +299,6 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     if do_rerun {
         execute(config, repo_path, branch_name);
     }
-}
-
-fn update_repo(repo: &Repository) -> Result<(), Error> {
-    merge_main_branch(repo)?;
-    Ok(())
 }
 
 fn load_cfg(matches: &ArgMatches, repo_path: &String) -> Result<Config, ()> {
