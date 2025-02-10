@@ -1,10 +1,10 @@
 [package]
 name = "gdep"
 authors = ["MOBSkuchen"]
-description = "Git-deploy -> Easily deploy & auto-update apps"
+description = "Git-deploy - Easily deploy & auto-update apps"
 license = "MIT"
 readme = "README.md"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 keywords = ["deployment", "git"]
 repository = "https://github.com/MOBSkuchen/gdep"
