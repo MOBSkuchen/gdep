@@ -327,11 +327,12 @@ fn run(matches: &ArgMatches) -> Result<(), GdepError> {
     let (repo, repo_path, config) = if config_in_repo {
         let repo = get_repo(provided_repo_path, opt_repo_url)?;
         let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
-        (repo, provided_repo_path.clone(), load_cfg(&matches, &repo_path)?)
+        (repo, repo_path.clone(), load_cfg(&matches, &repo_path)?)
     } else {
         let config = load_cfg(&matches, &provided_repo_path)?;
         let repo = get_repo_config(&config, &provided_repo_path)?;
-        (repo, provided_repo_path.to_owned(), config)
+        let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+        (repo, repo_path, config)
     };
 
     let branch = matches.get_one::<String>("branch").and_then(|t| { Some(t.clone()) }).or(Some(get_default_branch(&repo)?)).unwrap();
