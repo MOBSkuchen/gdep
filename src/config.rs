@@ -2,7 +2,6 @@ use std::{fmt, fs};
 use std::path::{Path, PathBuf};
 use yaml_rust2::{YamlLoader, Yaml};
 use crate::{conv_err, conv_err_e};
-use crate::errors::GdepError;
 
 pub enum RepoLike {
     Remote(String),
@@ -13,6 +12,7 @@ pub enum RepoLike {
 pub struct Config {
     pub name: String,
     pub re_run: bool,
+    pub restart_after_update: bool,
     pub exit_on_script_error: bool,
     pub exit_on_gdep_error: bool,
     pub script: String,
@@ -71,6 +71,7 @@ impl Config {
         let name = &doc["name"].as_str();
         let run_is_final = doc["final"].as_bool().is_some_and(|t| {t});
         let inst_file = doc["use_file"].as_bool().is_some_and(|t| {t});
+        let restart_after_update = doc["restart_update"].as_bool().is_some_and(|t| {t});
         let exit_on_gdep_error = !doc["gdep_err_ignore"].as_bool().is_some_and(|t| {t});
         let exit_on_script_error = !doc["script_err_ignore"].as_bool().is_some_and(|t| {t});
         let script = &doc[if inst_file {"file_path"} else {"script"}].as_str();
@@ -106,6 +107,7 @@ impl Config {
         Ok(Self {
             name: name.unwrap().to_string(),
             re_run: !run_is_final,
+            restart_after_update,
             exit_on_script_error,
             exit_on_gdep_error,
             script: installation,
