@@ -1,4 +1,5 @@
 mod config;
+mod errors;
 
 use std::{env, io};
 use std::io::Write;
@@ -12,6 +13,8 @@ use clap::{Arg, ArgMatches, ColorChoice};
 use run_script::ScriptOptions;
 use run_script::types::IoOptions;
 use crate::config::{Config, ConfigError, RepoLike};
+use crate::errors::GdepError;
+use crate::errors::GdepError::{UpdateErrorAheadBehind, UpdateErrorRepoAhead, UpdateFailed};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -32,19 +35,18 @@ macro_rules! conv_err_e {
     };
 }
 
-fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<(bool, bool)>) {
-    let mut err = false;
+fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<(Option<GdepError>, bool)>) {
+    let mut err = None;
     let repo_x = Repository::open(&*repo_path);
     
     if repo_x.is_ok() {
         let repo = repo_x.unwrap();
         while !*stop_flag.lock().unwrap() {
-            sender.send((false, false)).expect("Failed to send alive signal to main thread");
+            sender.send((None, false)).expect("Failed to send alive signal to main thread");
 
             let res = repo_update_cycle(&repo, &branch_name);
             if res.is_err() {
-                err = true;
-                println!("Error {}", res.unwrap_err());
+                err = Some(GdepError::from(res.unwrap_err()));
                 break
             }
 
@@ -52,31 +54,28 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
             match urs {
                 UpdateRelationState::Up2Date => { continue }
                 UpdateRelationState::Ahead(a) => {
-                    err = true;
-                    if err {
-                        println!("Repo is {a} ahead of the remote repo. Can not update")
-                    }
+                    err = Some(UpdateErrorRepoAhead(a));
                     break
                 }
                 UpdateRelationState::Behind(_) => {
-                    err = update_repo(&repo, &*branch_name).is_err();
-                    if err {
-                        println!("Failed to update repo!")
+                    let tmp_err = update_repo(&repo, &*branch_name);
+                    if tmp_err.is_err() {
+                        let unw_err = tmp_err.unwrap_err();
+                        err = Some(UpdateFailed(unw_err.to_string(), unw_err.code()))
                     } else {
                         println!("Successfully updated local repo")
                     }
                     break
                 }
                 UpdateRelationState::AheadBehind(a, b) => {
-                    if err {
-                        println!("Repo is {a} ahead of the remote repo and {b} behind. Can not update")
-                    }
+                    err = Some(UpdateErrorAheadBehind(a, b));
+                    break
                 }
             }
         }
     }
 
-    if err {
+    if err.is_some() {
         println!("Error while searching for updates!")
     }
     sender.send((err, true)).expect("Failed to send stop signal to main thread");
@@ -175,7 +174,7 @@ fn fetch_updates2(repo: &Repository, remote_name: &str, branch_name: &String) ->
     Ok(())
 }
 
-fn get_default_branch(repo: &Repository) -> Result<String, Error> {
+fn get_default_branch(repo: &Repository) -> Result<String, GdepError> {
     let branches = repo.branches(Some(BranchType::Remote))?;
 
     // Look for "origin/main" or "origin/master"
@@ -191,7 +190,7 @@ fn get_default_branch(repo: &Repository) -> Result<String, Error> {
     }
 
     if found_branch.is_none() {
-        Err(Error::from_str("No main/master branch found"))
+        Err(GdepError::BranchInferFailed)
     } else {
         let fb = found_branch.unwrap();
         println!("Branch inferred to be `{}`", fb);
@@ -215,7 +214,7 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
     })
 }
 
-fn execute(config: Config, repo_path: String, branch_name: String) {
+fn execute(config: Config, repo_path: String, branch_name: String) -> Option<GdepError> {
     let mut do_rerun = config.re_run;
     
     let stop_flag = Arc::new(Mutex::new(false));
@@ -263,7 +262,8 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
         }
     }
     
-    if err {
+    if err.is_some() {
+        
         do_rerun = do_rerun && !config.exit_on_gdep_error;
     }
 
@@ -276,83 +276,75 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
         println!("Restarting...");
         execute(config, repo_path, branch_name);
     }
+    
+    err
 }
 
-fn load_cfg(matches: &ArgMatches, repo_path: &String) -> Result<Config, ()> {
+fn load_cfg(matches: &ArgMatches, repo_path: &String) -> Result<Config, ConfigError> {
     let config_file_path = matches.get_one::<String>("config-file-o").and_then(|t1| {Some(t1.to_owned())})
         .or(matches.get_one::<String>("config-file-i").and_then(|t1| {Some(t1.to_owned())}).and_then(|t| {
             Some(format!("{}/{}", repo_path, t)) })
             .or(if matches.get_flag("config-inside") {Some(format!("{}/gdep.yaml", repo_path))}
             else { Some("gdep.yaml".to_string()) })).unwrap();
 
-    match Config::load_from_file(&config_file_path) {
-        Ok(config) => { Ok(config) }
-        Err(err) => {
-            match err {
-                ConfigError::ConfigFileNotFound => {
-                    println!("Can not read config file (at '{config_file_path}')")
-                }
-                ConfigError::ScriptFileNotFound => {
-                    println!("Can not read script file")
-                }
-                ConfigError::ParsingFailed(e) => {
-                    println!("Can not parse config file, due to {e}")
-                }
-                ConfigError::MissingContent(w) => {
-                    println!("Missing required property in config: '{w}'")
-                }
-            }
-            Err(())
-        }
-    }
+    Config::load_from_file(&config_file_path)
 }
 
-fn get_repo(repo_path: &String, repo_url: Option<&String>) -> Result<Repository, Error> {
+fn get_repo(repo_path: &String, repo_url: Option<&String>) -> Result<Repository, GdepError> {
     match Repository::open(&repo_path) {
         Ok(repo) => Ok(repo),
-        Err(e) => {
+        Err(_) => {
             if repo_url.is_none() {
-                println!("Can not find repository (under '{repo_path}'), consider adding --remote-repo <repository>");
-                return Err(e)
+                return Err(GdepError::LocalRepoNotFound(repo_path.to_owned()))
             }
-            Ok(Repository::clone(&repo_url.unwrap(), &repo_path)?)
+            match Repository::clone(&repo_url.unwrap(), &repo_path) {
+                Ok(repo) => {
+                    Ok(repo)
+                }
+                Err(_) => {
+                    Err(GdepError::RemoteRepoNotFound(repo_url.unwrap().to_owned()))
+                }
+            }
         }
     }
 }
 
-fn get_repo_config(config: &Config) -> Result<Repository, Error> {
+fn get_repo_config(config: &Config, provided_repo_path: &&String) -> Result<Repository, GdepError> {
     match &config.repo {
-        RepoLike::Remote(r) => {get_repo(&DEFAULT_REPO_PATH.to_string(), Some(&r))}
+        RepoLike::Remote(r) => {get_repo(provided_repo_path, Some(&r))}
         RepoLike::Local(l) => {get_repo(&l, None)}
         RepoLike::Remote2(r, d) => {get_repo(&d, Some(&r))}
     }
 }
 
-fn run(matches: &ArgMatches) -> Result<(), Error> {
+fn run(matches: &ArgMatches) -> Result<(), GdepError> {
     let opt_repo_url = matches.get_one::<String>("repo-url");
 
     let binding = DEFAULT_REPO_PATH.to_string();
     let provided_repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
 
-    let repo_infer_cfg = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
+    let config_in_repo = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
 
-    let (repo, repo_path, config) = if repo_infer_cfg {
+    let (repo, repo_path, config) = if config_in_repo {
         let repo = get_repo(provided_repo_path, opt_repo_url)?;
         let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
-        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 1"))?;
-        (repo, provided_repo_path.clone(), config)
+        (repo, provided_repo_path.clone(), load_cfg(&matches, &repo_path)?)
     } else {
-        let repo_path = DEFAULT_REPO_PATH.to_string();
-        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 2"))?;
-        let repo = get_repo_config(&config)?;
-        (repo, repo_path.clone(), config)
+        let config = conv_err!(load_cfg(&matches, &provided_repo_path), Error::from_str("Could not load config 2"))?;
+        let repo = get_repo_config(&config, &provided_repo_path)?;
+        (repo, provided_repo_path.to_owned(), config)
     };
 
     let branch = matches.get_one::<String>("branch").and_then(|t| { Some(t.clone()) }).or(Some(get_default_branch(&repo)?)).unwrap();
 
-    execute(config, repo_path, branch);
-
-    Ok(())
+    match execute(config, repo_path, branch) {
+        None => {
+            Ok(())
+        }
+        Some(err) => {
+            Err(err)
+        }
+    }
 }
 
 fn main() {
@@ -404,13 +396,12 @@ fn main() {
         .arg(Arg::new("debug")
             .long("debug")
             .short('d')
-            .help("Enable debug mode -> print errors as reals")
+            .help("Enable debug mode -> print errors as reals [currently unused]")
             .action(clap::ArgAction::SetTrue))
         .get_matches();
     
-    let debug = matches.get_flag("debug");
     let result = run(&matches);
-    if result.is_err() && debug {
-        println!("Debug error: {}", result.unwrap_err())
+    if result.is_err() {
+        println!("Gdep Error: {}", result.unwrap_err())
     }
 }

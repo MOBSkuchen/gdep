@@ -1,6 +1,7 @@
-use std::fs;
+use std::{fmt, fs};
 use yaml_rust2::{YamlLoader, Yaml};
 use crate::{conv_err, conv_err_e};
+use crate::errors::GdepError;
 
 pub enum RepoLike {
     Remote(String),
@@ -17,11 +18,30 @@ pub struct Config {
     pub repo: RepoLike
 }
 
+#[derive(Debug)]
 pub enum ConfigError {
     ConfigFileNotFound,
     ScriptFileNotFound,
     ParsingFailed(String),
     MissingContent(String)
+}
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigError::ConfigFileNotFound => {
+                write!(f, "Config file not found")
+            },
+            ConfigError::ScriptFileNotFound => {
+                write!(f, "Script file not found")
+            },
+            ConfigError::ParsingFailed(err) => {
+                write!(f, "Parsing failed: {}", err)
+            },
+            ConfigError::MissingContent(c) => {
+                write!(f, "Missing mandatory property: {}", c)
+            }
+        }
+    }
 }
 
 fn ld_yaml_docs(path: &String) -> Result<Vec<Yaml>, ConfigError> {
