@@ -40,7 +40,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
         let repo = repo_x.unwrap();
         while !*stop_flag.lock().unwrap() {
             sender.send((false, false)).expect("Failed to send alive signal to main thread");
-            
+
             let res = repo_update_cycle(&repo, &branch_name);
             if res.is_err() {
                 err = true;
@@ -110,29 +110,7 @@ fn fetch_updates<'a>(
     refs: &[&str],
     remote: &'a mut git2::Remote,
 ) -> Result<AnnotatedCommit<'a>, Error> {
-    let mut cb = RemoteCallbacks::new();
-    cb.transfer_progress(|stats| {
-        if stats.received_objects() == stats.total_objects() {
-            print!(
-                "Resolving deltas {}/{}\r",
-                stats.indexed_deltas(),
-                stats.total_deltas()
-            );
-        } else if stats.total_objects() > 0 {
-            print!(
-                "Received {}/{} objects ({}) in {} bytes\r",
-                stats.received_objects(),
-                stats.total_objects(),
-                stats.indexed_objects(),
-                stats.received_bytes()
-            );
-        }
-        io::stdout().flush().unwrap();
-        true
-    });
-
     let mut fo = FetchOptions::new();
-    fo.remote_callbacks(cb);
     fo.download_tags(AutotagOption::All);
     remote.fetch(refs, Some(&mut fo), None)?;
 
@@ -261,9 +239,9 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     let args = vec![];
 
     let mut child = run_script::spawn(config.script.as_str(), &args, &options).expect("Failed to start subprocess");
-    
+
     let stop_flag_clone = Arc::clone(&stop_flag);
-    
+
     let update_handle = thread::spawn(move || {
         update_sync(repo_path_arc, branch_name_arc, stop_flag_clone, tx);
     });
@@ -353,7 +331,7 @@ fn get_repo_config(config: &Config) -> Result<Repository, Error> {
 
 fn main() -> Result<(), Error> {
     // TODO: Do error handling
-    
+
     let matches = clap::Command::new(NAME)
         .about(DESCRIPTION)
         .version(VERSION)
