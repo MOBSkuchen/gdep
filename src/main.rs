@@ -13,7 +13,7 @@ use crate::config::{Config, ConfigError, RepoLike};
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
-static DEFAULT_REPO_PATH: &str = "gdeb_used_repo";
+static DEFAULT_REPO_PATH: &str = "gdep_used_repo";
 
 #[macro_export]
 macro_rules! conv_err {
