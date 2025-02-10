@@ -6,6 +6,9 @@ license = "MIT"
 readme = "README.md"
 version = "0.1.0"
 edition = "2021"
+keywords = ["deployment", "git"]
+repository = "https://github.com/MOBSkuchen/gdep"
+homepage = "https://crates.io/crates/gdep"
 
 [dependencies]
 git2 = "0.20.0"
