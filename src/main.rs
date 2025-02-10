@@ -90,14 +90,6 @@ pub enum UpdateRelationState {
     AheadBehind(usize, usize)
 }
 
-fn find_last_commit(repo: &Repository) -> Result<Commit, Error> {
-    let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
-    match obj.into_commit() {
-        Ok(c) => Ok(c),
-        Err(e) => Err(Error::from_str("Failed to find last commit")),
-    }
-}
-
 pub fn update_repo(repo: &Repository, branch_name: &str) -> Result<(), Error> {
     let remote_name = "origin";
     let mut remote = repo.find_remote(remote_name)?;
