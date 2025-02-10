@@ -19,7 +19,7 @@ pub struct Config {
     pub repo: RepoLike
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConfigError {
     ConfigFileNotFound,
     ScriptFileNotFound,

@@ -2,7 +2,7 @@ use std::fmt;
 use git2::{Error, ErrorCode};
 use crate::config::ConfigError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GdepError {
     LocalRepoNotFound(String),
     RemoteRepoNotFound(String),

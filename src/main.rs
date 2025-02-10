@@ -76,7 +76,8 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
     }
 
     if err.is_some() {
-        println!("Error while searching for updates!")
+        println!("Error while searching for updates!");
+        println!("{}", err.clone().unwrap())
     }
     sender.send((err, true)).expect("Failed to send stop signal to main thread");
 }
