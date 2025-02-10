@@ -328,9 +328,34 @@ fn get_repo_config(config: &Config) -> Result<Repository, Error> {
     }
 }
 
-fn main() -> Result<(), Error> {
-    // TODO: Do error handling
+fn run(matches: &ArgMatches) -> Result<(), Error> {
+    let opt_repo_url = matches.get_one::<String>("repo-url");
 
+    let binding = DEFAULT_REPO_PATH.to_string();
+    let provided_repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
+
+    let repo_infer_cfg = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
+
+    let (repo, repo_path, config) = if repo_infer_cfg {
+        let repo = get_repo(provided_repo_path, opt_repo_url)?;
+        let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 1"))?;
+        (repo, provided_repo_path.clone(), config)
+    } else {
+        let repo_path = DEFAULT_REPO_PATH.to_string();
+        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 2"))?;
+        let repo = get_repo_config(&config)?;
+        (repo, repo_path.clone(), config)
+    };
+
+    let branch = matches.get_one::<String>("branch").and_then(|t| { Some(t.clone()) }).or(Some(get_default_branch(&repo)?)).unwrap();
+
+    execute(config, repo_path, branch);
+
+    Ok(())
+}
+
+fn main() {
     let matches = clap::Command::new(NAME)
         .about(DESCRIPTION)
         .version(VERSION)
@@ -376,30 +401,16 @@ fn main() -> Result<(), Error> {
             .long("version")
             .help("Displays the version")
             .action(clap::ArgAction::Version))
+        .arg(Arg::new("debug")
+            .long("debug")
+            .short('d')
+            .help("Enable debug mode -> print errors as reals")
+            .action(clap::ArgAction::SetTrue))
         .get_matches();
-
-    let opt_repo_url = matches.get_one::<String>("repo-url");
-
-    let binding = DEFAULT_REPO_PATH.to_string();
-    let provided_repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
-
-    let repo_infer_cfg = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
-
-    let (repo, repo_path, config) = if repo_infer_cfg {
-        let repo = get_repo(provided_repo_path, opt_repo_url)?;
-        let repo_path = repo.path().parent().unwrap().to_str().unwrap().to_string();
-        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 1"))?;
-        (repo, provided_repo_path.clone(), config)
-    } else {
-        let repo_path = DEFAULT_REPO_PATH.to_string();
-        let config = conv_err!(load_cfg(&matches, &repo_path), Error::from_str("Could not load config 2"))?;
-        let repo = get_repo_config(&config)?;
-        (repo, repo_path.clone(), config)
-    };
-
-    let branch = matches.get_one::<String>("branch").and_then(|t| { Some(t.clone()) }).or(Some(get_default_branch(&repo)?)).unwrap();
-
-    execute(config, repo_path, branch);
-
-    Ok(())
+    
+    let debug = matches.get_flag("debug");
+    let result = run(&matches);
+    if result.is_err() && debug {
+        println!("Debug error: {}", result.unwrap_err())
+    }
 }
