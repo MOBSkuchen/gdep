@@ -37,10 +37,10 @@ impl Config {
     pub fn load_from_file(path: &String) -> Result<Self, ConfigError> {
         let doc = &ld_yaml_docs(path)?[0];
         let name = &doc["name"].as_str();
-        let re_run = doc["rerun"].as_bool().is_some_and(|t| {t});
+        let run_is_final = doc["final"].as_bool().is_some_and(|t| {t});
         let inst_file = doc["use_file"].as_bool().is_some_and(|t| {t});
-        let exit_on_gdep_error = doc["gdep_terminate"].as_bool().is_some_and(|t| {t});
-        let exit_on_script_error = doc["script_terminate"].as_bool().is_some_and(|t| {t});
+        let exit_on_gdep_error = !doc["gdep_err_ignore"].as_bool().is_some_and(|t| {t});
+        let exit_on_script_error = !doc["script_err_ignore"].as_bool().is_some_and(|t| {t});
         let script = &doc[if inst_file {"file_path"} else {"script"}].as_str();
         let local_repo = doc["local_repo"].as_bool().is_some_and(|t| {t});
         let repo = &doc["repo"].as_str();
@@ -73,7 +73,7 @@ impl Config {
 
         Ok(Self {
             name: name.unwrap().to_string(),
-            re_run,
+            re_run: !run_is_final,
             exit_on_script_error,
             exit_on_gdep_error,
             script: installation,
