@@ -39,6 +39,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
         let repo = repo_x.unwrap();
         while !*stop_flag.lock().unwrap() {
             sender.send((false, false)).expect("Failed to send alive signal to main thread");
+            
             let res = repo_update_cycle(&repo, &branch_name);
             if res.is_err() {
                 err = true;
@@ -47,13 +48,11 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
 
             let urs = res.unwrap();
             match urs {
-                UpdateRelationState::Up2Date => {
-                    continue
-                }
+                UpdateRelationState::Up2Date => { continue }
                 UpdateRelationState::Ahead(a) => {
                     err = true;
                     if err {
-                        println!("Repo is {a} ahead of the remote repo")
+                        println!("Repo is {a} ahead of the remote repo. Can not update")
                     }
                     break
                 }
@@ -68,7 +67,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
                 }
                 UpdateRelationState::AheadBehind(a, b) => {
                     if err {
-                        println!("Repo is {a} ahead of the remote repo and {b} behind")
+                        println!("Repo is {a} ahead of the remote repo and {b} behind. Can not update")
                     }
                 }
             }
@@ -169,7 +168,6 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
 }
 
 fn execute(config: Config, repo_path: String, branch_name: String) {
-    println!("{}", repo_path);
     let do_rerun = config.re_run;
     
     let stop_flag = Arc::new(Mutex::new(false));
@@ -210,18 +208,13 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
     }
 
     if result.is_some() {
-        if result.unwrap().success() {
-            println!("Running script completed successfully.");
-        } else {
+        if !result.unwrap().success() {
             println!("Running script failed with exit code: {}", result.unwrap());
         }
-    } else {
-        println!("Running script did not finish in time");
     }
 
     *stop_flag.lock().unwrap() = true;
 
-    println!("Terminating the subprocess...");
     child.kill().expect("Failed to kill the subprocess");
     update_handle.join().expect("Function thread panicked");
 
