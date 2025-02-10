@@ -2,12 +2,14 @@ mod config;
 
 use std::{env};
 use std::path::PathBuf;
+use std::process::{Child, ExitStatus};
 use git2::{Repository, Error, BranchType, RemoteCallbacks, Cred};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
 use clap::{Arg, ArgMatches, ColorChoice};
 use run_script::ScriptOptions;
+use run_script::types::IoOptions;
 use crate::config::{Config, ConfigError, RepoLike};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
@@ -29,13 +31,14 @@ macro_rules! conv_err_e {
     };
 }
 
-fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<bool>) {
+fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<Mutex<bool>>, sender: mpsc::Sender<(bool, bool)>) {
     let mut err = false;
     let repo_x = Repository::open(&*repo_path);
     
     if repo_x.is_ok() {
         let repo = repo_x.unwrap();
         while !*stop_flag.lock().unwrap() {
+            sender.send((false, false)).expect("Failed to send alive signal to main thread");
             let res = repo_update_cycle(&repo, &branch_name);
             if res.is_err() {
                 err = true;
@@ -55,9 +58,11 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
                     break
                 }
                 UpdateRelationState::Behind(_) => {
-                    err = update_repo(&repo, &branch_name).is_err();
+                    err = update_repo(&repo).is_err();
                     if err {
                         println!("Failed to update repo!")
+                    } else {
+                        println!("Successfully updated local repo")
                     }
                     break
                 }
@@ -71,7 +76,7 @@ fn update_sync(repo_path: Arc<String>, branch_name: Arc<String>, stop_flag: Arc<
     }
 
     println!("Function execution stopped. Sending signal to main thread...");
-    sender.send(err).expect("Failed to send stop signal to main thread");
+    sender.send((err, true)).expect("Failed to send stop signal to main thread");
 }
 
 #[derive(Debug)]
@@ -102,9 +107,15 @@ fn merge_main_branch(repo: &Repository) -> Result<UpdateLog, Error> {
         return Ok(UpdateLog::MergeConflicts);
     }
 
-    let tree = repo.find_tree(index.write_tree()?)?;
+    let tree_id = index.write_tree_to(repo)?;  // Ensure index is tied to the repo
+    let tree = repo.find_tree(tree_id)?;
     let sig = repo.signature()?;
     repo.commit(Some("HEAD"), &sig, &sig, "Merged changes", &tree, &[&head, &fetch_head])?;
+
+    // Ensure working directory is updated
+    repo.checkout_head(Some(
+        git2::build::CheckoutBuilder::new().force()
+    ))?;
 
     Ok(UpdateLog::Success)
 }
@@ -142,6 +153,7 @@ fn get_default_branch(repo: &Repository) -> Result<String, Error> {
 }
 
 fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelationState, Error> {
+    fetch_updates(repo, "origin", branch)?;
     let head = repo.head()?.peel_to_commit()?;
 
     let remote_branch = repo.find_reference(format!("refs/remotes/origin/{}", branch).as_str())?.peel_to_commit()?;
@@ -157,6 +169,7 @@ fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelatio
 }
 
 fn execute(config: Config, repo_path: String, branch_name: String) {
+    println!("{}", repo_path);
     let do_rerun = config.re_run;
     
     let stop_flag = Arc::new(Mutex::new(false));
@@ -167,42 +180,57 @@ fn execute(config: Config, repo_path: String, branch_name: String) {
 
     let mut options = ScriptOptions::new();
     options.working_directory = Some(PathBuf::from(&repo_path));
-    
+    options.output_redirection = IoOptions::Inherit;
+
     let args = vec![];
 
     let mut child = run_script::spawn(config.script.as_str(), &args, &options).expect("Failed to start subprocess");
     
     let stop_flag_clone = Arc::clone(&stop_flag);
-    let function_handle = thread::spawn(move || {
+    
+    let update_handle = thread::spawn(move || {
         update_sync(repo_path_arc, branch_name_arc, stop_flag_clone, tx);
     });
-    
-    let result = child.wait().expect("Failed to wait on child");
 
-    if result.success() {
-        println!("Running script completed successfully.");
+    let mut result: Option<ExitStatus> = None;
+
+    while !rx.recv().expect("Failed to receive singal from update thread").1 {
+        let boring_result = child.try_wait();
+        if boring_result.is_err() {
+            *stop_flag.lock().unwrap() = true;
+            // TODO : add handling
+            boring_result.expect("Errorororororoor");
+            break
+        } else {
+            result = boring_result.unwrap();
+        }
+        if result.is_some() {
+            break;
+        }
+    }
+
+    if result.is_some() {
+        if result.unwrap().success() {
+            println!("Running script completed successfully.");
+        } else {
+            println!("Running script failed with exit code: {}", result.unwrap());
+        }
     } else {
-        println!("Running script failed with exit code: {}", result);
+        println!("Running script did not finish in time");
     }
 
     *stop_flag.lock().unwrap() = true;
 
-    let err = rx.recv().expect("Failed to receive stop signal");
-    if err {
-        println!("Got an error while looking for updates!")
-    }
-
     println!("Terminating the subprocess...");
     child.kill().expect("Failed to kill the subprocess");
-    function_handle.join().expect("Function thread panicked");
+    update_handle.join().expect("Function thread panicked");
 
     if do_rerun {
         execute(config, repo_path, branch_name);
     }
 }
 
-fn update_repo(repo: &Repository, branch_name: &String) -> Result<(), Error> {
-    fetch_updates(repo, "origin", branch_name)?;
+fn update_repo(repo: &Repository) -> Result<(), Error> {
     merge_main_branch(repo)?;
     Ok(())
 }
@@ -250,11 +278,10 @@ fn get_repo(repo_path: &String, repo_url: Option<&String>) -> Result<Repository,
 }
 
 fn get_repo_config(config: &Config) -> Result<Repository, Error> {
-    let mt = "".to_string();
     match &config.repo {
-        RepoLike::Remote(r) => {get_repo(&mt, Some(&r))}
+        RepoLike::Remote(r) => {get_repo(&DEFAULT_REPO_PATH.to_string(), Some(&r))}
         RepoLike::Local(l) => {get_repo(&l, None)}
-        RepoLike::Remote2(r, d) => {get_repo(&r, Some(&d))}
+        RepoLike::Remote2(r, d) => {get_repo(&d, Some(&r))}
     }
 }
 
@@ -307,12 +334,12 @@ fn main() -> Result<(), Error> {
             .help("Displays the version")
             .action(clap::ArgAction::Version))
         .get_matches();
-    
+
     let opt_repo_url = matches.get_one::<String>("repo-url");
 
     let binding = DEFAULT_REPO_PATH.to_string();
     let provided_repo_path = matches.get_one::<String>("repo-path").or(Some(&binding)).unwrap();
-    
+
     let repo_infer_cfg = matches.get_flag("config-inside") || matches.get_one::<String>("config-file-i").is_some();
 
     let (repo, repo_path, config) = if repo_infer_cfg {
