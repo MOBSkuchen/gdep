@@ -1,4 +1,5 @@
 use std::{fmt, fs};
+use std::path::{Path, PathBuf};
 use yaml_rust2::{YamlLoader, Yaml};
 use crate::{conv_err, conv_err_e};
 use crate::errors::GdepError;
@@ -44,12 +45,23 @@ impl fmt::Display for ConfigError {
     }
 }
 
+fn resolve_other_path(original: &Path, other: &Path) -> PathBuf {
+    if other.is_absolute() {
+        return other.to_path_buf();
+    }
+
+    let mut resolved_path = original.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    resolved_path.push(other);
+    resolved_path
+}
+
 fn ld_yaml_docs(path: &String) -> Result<Vec<Yaml>, ConfigError> {
     let content = conv_err!(fs::read_to_string(path), ConfigError::ConfigFileNotFound)?;
     conv_err_e!(YamlLoader::load_from_str(&*content), ConfigError::ParsingFailed)
 }
 
-fn ld_script_file(path: String) -> Result<String, ConfigError> {
+fn ld_script_file(cfg_path: &String, script_path: &String) -> Result<String, ConfigError> {
+    let path = resolve_other_path(Path::new(cfg_path.as_str()), Path::new(script_path.as_str()));
     Ok(conv_err!(fs::read_to_string(path), ConfigError::ScriptFileNotFound)?)
 }
 
@@ -89,7 +101,7 @@ impl Config {
         
         let script = script.unwrap().to_string();
         
-        let installation = if inst_file {ld_script_file(script)?} else {script};
+        let installation = if inst_file {ld_script_file(path, &script)?} else {script};
 
         Ok(Self {
             name: name.unwrap().to_string(),

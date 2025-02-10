@@ -402,6 +402,6 @@ fn main() {
     
     let result = run(&matches);
     if result.is_err() {
-        println!("Gdep Error: {}", result.unwrap_err())
+        println!("Gdep Error => {}", result.unwrap_err())
     }
 }
