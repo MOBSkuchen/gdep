@@ -16,7 +16,8 @@ pub struct Config {
     pub exit_on_script_error: bool,
     pub exit_on_gdep_error: bool,
     pub script: String,
-    pub repo: RepoLike
+    pub repo: RepoLike,
+    pub cleanup: Option<String>
 }
 
 #[derive(Debug, Clone)]
@@ -70,11 +71,13 @@ impl Config {
         let doc = &ld_yaml_docs(path)?[0];
         let name = &doc["name"].as_str();
         let run_is_final = doc["final"].as_bool().is_some_and(|t| {t});
-        let inst_file = doc["use_file"].as_bool().is_some_and(|t| {t});
+        let inst_file1 = doc["script_use_file"].as_bool().is_some_and(|t| {t});
+        let inst_file2 = doc["script_use_file"].as_bool().is_some_and(|t| {t});
         let restart_after_update = doc["restart_update"].as_bool().is_some_and(|t| {t});
         let exit_on_gdep_error = !doc["gdep_err_ignore"].as_bool().is_some_and(|t| {t});
         let exit_on_script_error = !doc["script_err_ignore"].as_bool().is_some_and(|t| {t});
-        let script = &doc[if inst_file {"file_path"} else {"script"}].as_str();
+        let script = &doc[if inst_file1 {"file_path"} else {"script"}].as_str();
+        let cleanup = &doc[if inst_file2 {"cleanup_file_path"} else {"cleanup"}].as_str();
         let local_repo = doc["local_repo"].as_bool().is_some_and(|t| {t});
         let repo = &doc["repo"].as_str();
         let into_path = &doc["into_path"].as_str();
@@ -101,8 +104,11 @@ impl Config {
                             };
         
         let script = script.unwrap().to_string();
-        
-        let installation = if inst_file {ld_script_file(path, &script)?} else {script};
+
+        let installation = if inst_file1 {ld_script_file(&path, &script)?} else {script};
+        let cleanup = if cleanup.is_some() {
+            Some(if inst_file2 {ld_script_file(&path, &cleanup.unwrap().to_string())?} else {cleanup.unwrap().to_string()})
+        } else {None};
 
         Ok(Self {
             name: name.unwrap().to_string(),
@@ -111,6 +117,7 @@ impl Config {
             exit_on_script_error,
             exit_on_gdep_error,
             script: installation,
+            cleanup,
             repo
         })
     }

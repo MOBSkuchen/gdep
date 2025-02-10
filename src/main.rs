@@ -1,11 +1,10 @@
 mod config;
 mod errors;
 
-use std::{env, io};
-use std::io::Write;
+use std::{env};
 use std::path::PathBuf;
 use std::process::{ExitStatus};
-use git2::{Error, Repository, BranchType, RemoteCallbacks, Cred, Commit, ObjectType, MergeOptions, AnnotatedCommit, FetchOptions, AutotagOption};
+use git2::{Error, Repository, BranchType, RemoteCallbacks, Cred, AnnotatedCommit, FetchOptions, AutotagOption};
 use std::string::ToString;
 use std::thread;
 use std::sync::{Arc, Mutex, mpsc};
@@ -229,7 +228,6 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
     options.output_redirection = IoOptions::Inherit;
 
     let args = vec![];
-
     let mut child = run_script::spawn(config.script.as_str(), &args, &options).expect("Failed to start subprocess");
 
     let stop_flag_clone = Arc::clone(&stop_flag);
@@ -255,7 +253,7 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
         }
         (err, stop) = rx.recv().expect("Failed to receive singal from update thread");
     }
-    
+
     if result.is_none() {
         child.kill().expect("Error while killing child :(");
         result = child.try_wait().expect("try_wait failed");
@@ -274,9 +272,18 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
 
     *stop_flag.lock().unwrap() = true;
 
-    println!("Waiting for script to finish...");
     child.kill().expect("Failed to kill the subprocess");
     child.wait().expect("Waiting failed");
+
+    if config.cleanup.is_some() {
+        println!("Cleaning up...");
+        let mut cl_options = ScriptOptions::new();
+        cl_options.working_directory = Some(PathBuf::from(&repo_path));
+        cl_options.output_redirection = IoOptions::Inherit;
+        let mut cl_child = run_script::spawn(&*config.cleanup.clone().unwrap(), &args, &options).expect("Failed to start subprocess");
+        cl_child.wait().expect("Failed to clean up");
+    }
+
     update_handle.join().expect("Function thread panicked");
 
     if do_rerun || config.re_run {
