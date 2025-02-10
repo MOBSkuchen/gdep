@@ -72,7 +72,7 @@ impl Config {
         let name = &doc["name"].as_str();
         let run_is_final = doc["final"].as_bool().is_some_and(|t| {t});
         let inst_file1 = doc["script_use_file"].as_bool().is_some_and(|t| {t});
-        let inst_file2 = doc["script_use_file"].as_bool().is_some_and(|t| {t});
+        let inst_file2 = doc["cleanup_use_file"].as_bool().is_some_and(|t| {t});
         let restart_after_update = doc["restart_update"].as_bool().is_some_and(|t| {t});
         let exit_on_gdep_error = !doc["gdep_err_ignore"].as_bool().is_some_and(|t| {t});
         let exit_on_script_error = !doc["script_err_ignore"].as_bool().is_some_and(|t| {t});
