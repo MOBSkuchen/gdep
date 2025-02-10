@@ -254,6 +254,11 @@ fn execute(config: Config, repo_path: String, branch_name: String) -> Option<Gde
         }
         (err, stop) = rx.recv().expect("Failed to receive singal from update thread");
     }
+    
+    if result.is_none() {
+        child.kill().expect("Error while killing child :(");
+        result = Some(child.wait().expect("Failed to wait"))
+    }
 
     if result.is_some() {
         if !result.unwrap().success() {
