@@ -148,7 +148,13 @@ fn get_default_branch(repo: &Repository) -> Result<String, Error> {
         }
     }
 
-    found_branch.ok_or_else(|| Error::from_str("No main/master branch found"))
+    if found_branch.is_none() {
+        Err(Error::from_str("No main/master branch found"))
+    } else {
+        let fb = found_branch.unwrap();
+        println!("Branch inferred to be `{}`", fb);
+        Ok(fb)
+    }
 }
 
 fn repo_update_cycle(repo: &Repository, branch: &String) -> Result<UpdateRelationState, Error> {
